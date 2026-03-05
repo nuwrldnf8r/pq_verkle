@@ -31,15 +31,27 @@ pub fn commitment_sign_message(commitment: &[u8]) -> Vec<u8> {
     shake256(&msg, 64)
 }
 
+/// Sort a key set into canonical lexicographic order for use with
+/// [`proof_binding`] and [`PQVerkleTree::prove_multiple`].
+///
+/// Multi-key proofs always bind keys in this order.  Call this on the
+/// verifier side before calling [`PQProof::verify`] if you are not sure
+/// the keys were already sorted by the prover.
+pub fn canonical_keys(keys: &mut [Vec<u8>]) {
+    keys.sort();
+}
+
 /// Compute a proof-binding tag that ties a proof to a specific commitment and
 /// set of keys.
 ///
 /// Layout: `DOMAIN_PROOF || len(commitment):u64le || commitment
 ///          || num_keys:u64le || (len(key):u64le || key)*`
 ///
-/// The result is a 64-byte SHAKE-256 digest stored inside every `PQProof`.
-/// Verification recomputes this tag and compares it; a mismatch means the
-/// proof was produced for a different commitment or different key set.
+/// Keys **must** be in canonical lexicographic order (call [`canonical_keys`]
+/// first if needed).  The result is a 64-byte SHAKE-256 digest stored inside
+/// every `PQProof`.  Verification recomputes this tag and compares it; a
+/// mismatch means the proof was produced for a different commitment or
+/// different key set.
 pub fn proof_binding(commitment: &[u8], keys: &[Vec<u8>]) -> Vec<u8> {
     let mut msg = Vec::new();
     msg.extend_from_slice(DOMAIN_PROOF);

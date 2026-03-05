@@ -4,9 +4,8 @@
 [![Crates.io](https://img.shields.io/crates/v/verkle_pq.svg)](https://crates.io/crates/verkle_pq)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A quantum-resistant Verkle tree library built on top of
-[`quilibrium-verkle`](https://crates.io/crates/quilibrium-verkle), adding two
-post-quantum cryptographic layers:
+**PQ-authenticated Verkle commitments** — a post-quantum authentication layer
+built on top of [`quilibrium-verkle`](https://crates.io/crates/quilibrium-verkle):
 
 1. **Signed commitments** — every root commitment is signed with
    [CRYSTALS-Dilithium3 (ML-DSA-65)](https://pq-crystals.org/dilithium/), a
@@ -14,6 +13,8 @@ post-quantum cryptographic layers:
 2. **Bound proofs** — every proof carries a 64-byte SHAKE-256 binding tag
    that ties it to the exact commitment it was produced for, preventing
    replay attacks.
+3. **Canonical key ordering** — `prove_multiple` always sorts keys
+   lexicographically, so proof binding tags are invariant to call-site ordering.
 
 ---
 
@@ -64,40 +65,58 @@ bls48581   = "2.1"   # must be initialised once before any tree operations
 // Required once per process — initialises the BLS48-581 pairing library.
 verkle_pq::init();
 
-use verkle_pq::PQVerkleTree;
+use verkle_pq::{DilithiumPubKey, PQVerkleTree};
 
 let mut tree = PQVerkleTree::new();
+
+// The public key you will distribute to verifiers.
+let trusted_pk: DilithiumPubKey = tree.dilithium_pubkey();
+
 tree.insert(b"name".to_vec(),  b"alice".to_vec()).unwrap();
 tree.insert(b"score".to_vec(), b"9001".to_vec()).unwrap();
 
 // Commit — returns a Dilithium3-signed root commitment.
 let commitment = tree.commit().unwrap();
-assert!(commitment.verify_pq_signature().unwrap());
+
+// Authenticated verification: supply the trusted public key.
+// This is the correct way to verify — it rejects commitments signed
+// by keys you don't trust (returns Err(PubkeyMismatch) on key mismatch).
+assert!(commitment.verify_against_pubkey(&trusted_pk).unwrap());
 
 // Single-key proof.
 let proof = tree.prove(b"name").unwrap().expect("key exists");
-let values = proof.verify_and_extract(&commitment).unwrap();
+let values = proof.verify_and_extract_with_pubkey(&commitment, &trusted_pk).unwrap();
 assert_eq!(values[0], b"alice");
 
-// Multi-key proof (one KZG proof covers all keys).
-let mp = tree.prove_multiple(&[b"name".to_vec(), b"score".to_vec()]).unwrap();
-let all = mp.verify_and_extract(&commitment).unwrap();
-assert_eq!(all[0], b"alice");
+// Multi-key proof — keys are sorted canonically internally.
+let mp = tree.prove_multiple(&[b"score".to_vec(), b"name".to_vec()]).unwrap();
+let all = mp.verify_and_extract_with_pubkey(&commitment, &trusted_pk).unwrap();
+// Values are returned in canonical (lexicographic) key order.
+assert_eq!(all[0], b"alice"); // "name" sorts before "score"
 assert_eq!(all[1], b"9001");
 ```
+
+> **Self-consistency vs. authenticated verification**  
+> `verify_embedded_key()` only checks that the commitment's embedded key
+> matches the signature — an attacker can satisfy this by stapling their own
+> key. Always call `verify_against_pubkey(&trusted_pk)` (or
+> `verify_with_pubkey`) when security matters.
 
 ### Reusing an existing keypair
 
 ```rust
-use verkle_pq::{PQKeypair, PQVerkleTree};
+use verkle_pq::{PQKeypair, PQVerkleTree, DilithiumPubKey};
 
 let keypair = PQKeypair::generate();
-// Store keypair.public_key_bytes() in your PKI / on-chain certificate.
+// Distribute this to verifiers (e.g., publish in your PKI / on-chain).
+let trusted_pk = DilithiumPubKey(keypair.public_key_bytes().to_vec());
 
 let mut tree = PQVerkleTree::with_keypair(keypair);
 tree.insert(b"token".to_vec(), b"0xdeadbeef".to_vec()).unwrap();
 let commitment = tree.commit().unwrap();
-// Verifiers can authenticate `commitment` using the stored public key.
+
+// Verifiers authenticate with the trusted key:
+assert!(commitment.verify_against_pubkey(&trusted_pk).unwrap());
 ```
 
 ### Optional serde support
@@ -171,11 +190,11 @@ and SHAKE-256 hashing add no measurable overhead to prove/verify.
 ## Running tests
 
 ```sh
-# Fast unit tests (19 tests, ~53 s dominated by BLS48-581 pairing)
-cargo test -- --test-threads=1
+# Fast unit tests (27 tests, ~68 s dominated by BLS48-581 pairing)
+cargo test --features serde -- --test-threads=1
 
 # Full suite including slow 60-key exhaustive test
-cargo test -- --include-ignored --test-threads=1
+cargo test --features serde -- --include-ignored --test-threads=1
 ```
 
 ---

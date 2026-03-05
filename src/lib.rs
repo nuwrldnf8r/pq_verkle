@@ -21,15 +21,32 @@
 //!
 //! ### What the PQ layers provide
 //!
-//! 1. **Signed commitments** — the tree owner signs every root commitment with
-//!    Dilithium3 (ML-DSA-65), a NIST-standardised lattice-based signature
-//!    scheme.  A verifier who holds the public key can reject unsigned or
-//!    forged root commitments, even against a quantum adversary.
+//! 1. **Authenticated commitments** — every root commitment is signed with
+//!    Dilithium3 (ML-DSA-65), a NIST-standardised lattice-based scheme.
+//!    Verifiers who hold the signer's [`DilithiumPubKey`] can reject any
+//!    unsigned or forged commitment, even from a quantum adversary.
 //!
 //! 2. **Bound proofs** — each proof stores a 64-byte SHAKE-256 tag over
-//!    `(commitment || keys)`.  Verification recomputes the tag; a mismatch
-//!    means the proof was generated for a different commitment or key set,
-//!    preventing proof-replay attacks.
+//!    `(commitment || sorted-keys)`.  Verification recomputes the tag; a
+//!    mismatch means the proof was generated for a different commitment or
+//!    key set, preventing proof-replay attacks.
+//!
+//! ### Public-key trust model
+//!
+//! The commitment embeds the signer's public key, but embedding alone does
+//! **not** prove authority — anyone can staple their own key.  Always verify
+//! against a key you obtained from a **trusted source** (PKI, on-chain
+//! record, certificate):
+//!
+//! ```no_run
+//! # let commitment: verkle_pq::PQCommitment = unimplemented!();
+//! # let my_trusted_pk: verkle_pq::DilithiumPubKey = unimplemented!();
+//! // ✅ Authenticated: checks the key you trust.
+//! let ok = commitment.verify_against_pubkey(&my_trusted_pk).unwrap();
+//!
+//! // ⚠️  Self-consistency only: tamper detection, not authentication.
+//! let ok = commitment.verify_embedded_key().unwrap();
+//! ```
 //!
 //! ## Quick start
 //!
@@ -44,16 +61,20 @@
 //! tree.insert(b"key2".to_vec(), b"value2".to_vec()).unwrap();
 //!
 //! let commitment = tree.commit().unwrap();
-//! assert!(commitment.verify_pq_signature().unwrap());
+//! assert!(commitment.verify_embedded_key().unwrap());
+//!
+//! // Share the public key with verifiers.
+//! let trusted_pk = tree.dilithium_pubkey();
 //!
 //! // Single-key proof
 //! let proof = tree.prove(b"key1").unwrap().expect("key exists");
-//! let values = proof.verify_and_extract(&commitment).unwrap();
+//! // Authenticated verification against the trusted key:
+//! let values = proof.verify_and_extract_with_pubkey(&commitment, &trusted_pk).unwrap();
 //! assert_eq!(values[0], b"value1");
 //!
-//! // Multi-key proof
+//! // Multi-key proof (keys are sorted canonically inside prove_multiple)
 //! let mp = tree.prove_multiple(&[b"key1".to_vec(), b"key2".to_vec()]).unwrap();
-//! let all = mp.verify_and_extract(&commitment).unwrap();
+//! let all = mp.verify_and_extract_with_pubkey(&commitment, &trusted_pk).unwrap();
 //! assert_eq!(all[0], b"value1");
 //! assert_eq!(all[1], b"value2");
 //! ```
@@ -64,8 +85,11 @@ pub mod pq_sign;
 pub mod pq_verkle;
 
 pub use error::PqVerkleError;
+pub use pq_hash::canonical_keys;
 pub use pq_sign::PQKeypair;
-pub use pq_verkle::{PQCommitment, PQProof, PQVerkleTree};
+pub use pq_verkle::{
+    CommitmentBytes, DilithiumPubKey, DilithiumSignature, PQCommitment, PQProof, PQVerkleTree,
+};
 
 /// Initialise the BLS48-581 cryptographic library.
 ///
@@ -99,17 +123,25 @@ mod tests {
         tree.insert(b"key2".to_vec(), b"value2".to_vec()).unwrap();
 
         let commitment = tree.commit().unwrap();
+        let trusted_pk = tree.dilithium_pubkey();
 
-        // The PQ signature on the commitment must be valid.
+        // Self-consistency check.
         assert!(
-            commitment.verify_pq_signature().unwrap(),
-            "PQ signature should be valid"
+            commitment.verify_embedded_key().unwrap(),
+            "embedded key should be self-consistent"
+        );
+        // Authenticated check against the trusted key.
+        assert!(
+            commitment.verify_against_pubkey(&trusted_pk).unwrap(),
+            "commitment should verify against trusted key"
         );
 
         let proof = tree.prove(b"key1").unwrap().expect("key1 should exist");
-        assert!(proof.verify(&commitment).unwrap());
+        assert!(proof.verify_with_pubkey(&commitment, &trusted_pk).unwrap());
 
-        let values = proof.verify_and_extract(&commitment).unwrap();
+        let values = proof
+            .verify_and_extract_with_pubkey(&commitment, &trusted_pk)
+            .unwrap();
         assert_eq!(values[0], b"value1");
     }
 
@@ -123,14 +155,17 @@ mod tests {
             tree.insert(k.to_vec(), v.to_vec()).unwrap();
         }
         let commitment = tree.commit().unwrap();
+        let trusted_pk = tree.dilithium_pubkey();
 
         for (k, v) in &pairs {
             let proof = tree.prove(k).unwrap().expect("key should exist");
             assert!(
-                proof.verify(&commitment).unwrap(),
+                proof.verify_with_pubkey(&commitment, &trusted_pk).unwrap(),
                 "verify failed for {k:?}"
             );
-            let values = proof.verify_and_extract(&commitment).unwrap();
+            let values = proof
+                .verify_and_extract_with_pubkey(&commitment, &trusted_pk)
+                .unwrap();
             assert_eq!(values[0], v.to_vec(), "value mismatch for {k:?}");
         }
     }
@@ -188,14 +223,20 @@ mod tests {
         init_bls();
         let mut tree = PQVerkleTree::new();
         tree.insert(b"data".to_vec(), b"value".to_vec()).unwrap();
+        let trusted_pk = tree.dilithium_pubkey();
         let mut commitment = tree.commit().unwrap();
 
         // Flip one bit of the raw commitment.
         commitment.commitment[0] ^= 0xFF;
 
         assert!(
-            !commitment.verify_pq_signature().unwrap(),
-            "tampered commitment should fail PQ signature check"
+            !commitment.verify_embedded_key().unwrap(),
+            "tampered commitment should fail embedded-key check"
+        );
+        // verify_against_pubkey should also fail (signature covers the bytes).
+        assert!(
+            !commitment.verify_against_pubkey(&trusted_pk).unwrap(),
+            "tampered commitment should fail trusted-key check"
         );
     }
 
@@ -210,8 +251,28 @@ mod tests {
         commitment.pq_signature[0] ^= 0x01;
 
         assert!(
-            !commitment.verify_pq_signature().unwrap(),
+            !commitment.verify_embedded_key().unwrap(),
             "tampered signature should be rejected"
+        );
+    }
+
+    // ── pubkey mismatch ───────────────────────────────────────────────────────
+
+    #[test]
+    fn test_verify_against_wrong_pubkey_returns_mismatch_error() {
+        init_bls();
+        let mut tree = PQVerkleTree::new();
+        tree.insert(b"k".to_vec(), b"v".to_vec()).unwrap();
+        let commitment = tree.commit().unwrap();
+
+        // A key from a completely different tree.
+        let other_tree = PQVerkleTree::new();
+        let wrong_pk = other_tree.dilithium_pubkey();
+
+        let result = commitment.verify_against_pubkey(&wrong_pk);
+        assert!(
+            matches!(result, Err(PqVerkleError::PubkeyMismatch)),
+            "expected PubkeyMismatch, got {result:?}"
         );
     }
 
@@ -256,16 +317,53 @@ mod tests {
         tree.insert(vec![3], vec![30]).unwrap();
 
         let commitment = tree.commit().unwrap();
+        let trusted_pk = tree.dilithium_pubkey();
 
-        let keys = vec![vec![1u8], vec![2u8], vec![3u8]];
+        // Pass keys in reverse order — prove_multiple sorts them internally.
+        let keys = vec![vec![3u8], vec![1u8], vec![2u8]];
         let proof = tree.prove_multiple(&keys).unwrap();
 
         assert!(
-            proof.verify(&commitment).unwrap(),
+            proof.verify_with_pubkey(&commitment, &trusted_pk).unwrap(),
             "multiproof verify failed"
         );
-        let values = proof.verify_and_extract(&commitment).unwrap();
+        // Values are returned in canonical (sorted) key order: [1,2,3].
+        let values = proof
+            .verify_and_extract_with_pubkey(&commitment, &trusted_pk)
+            .unwrap();
         assert_eq!(values, vec![vec![10u8], vec![20u8], vec![30u8]]);
+    }
+
+    #[test]
+    fn test_multiproof_canonical_ordering_is_stable() {
+        // prove_multiple([b, a]) and prove_multiple([a, b]) must produce
+        // the same proof (same binding tag, same inner proof).
+        init_bls();
+        let mut tree = PQVerkleTree::new();
+        tree.insert(b"aaa".to_vec(), b"1".to_vec()).unwrap();
+        tree.insert(b"zzz".to_vec(), b"2".to_vec()).unwrap();
+        let commitment = tree.commit().unwrap();
+        let trusted_pk = tree.dilithium_pubkey();
+
+        let proof_fwd = tree
+            .prove_multiple(&[b"aaa".to_vec(), b"zzz".to_vec()])
+            .unwrap();
+        let proof_rev = tree
+            .prove_multiple(&[b"zzz".to_vec(), b"aaa".to_vec()])
+            .unwrap();
+
+        // Both proofs must have identical binding tags (same canonical order).
+        assert_eq!(proof_fwd.pq_binding, proof_rev.pq_binding);
+        assert!(
+            proof_fwd
+                .verify_with_pubkey(&commitment, &trusted_pk)
+                .unwrap()
+        );
+        assert!(
+            proof_rev
+                .verify_with_pubkey(&commitment, &trusted_pk)
+                .unwrap()
+        );
     }
 
     #[test]
@@ -276,6 +374,7 @@ mod tests {
         tree.insert(vec![2], vec![20]).unwrap();
 
         let c1 = tree.commit().unwrap();
+        let trusted_pk = tree.dilithium_pubkey();
         let proof = tree.prove_multiple(&[vec![1u8], vec![2u8]]).unwrap();
 
         // Build a different commitment.
@@ -283,11 +382,14 @@ mod tests {
         tree2.insert(vec![1], vec![99]).unwrap();
         tree2.insert(vec![2], vec![88]).unwrap();
         let c2 = tree2.commit().unwrap();
+        let trusted_pk2 = tree2.dilithium_pubkey();
 
-        // The proof was bound to c1; it must fail against c2.
-        assert!(!proof.verify(&c2).unwrap());
-        // And it must still pass for c1.
-        assert!(proof.verify(&c1).unwrap());
+        // The proof was bound to c1; must fail against c2 (wrong binding tag).
+        // verify_against_pubkey will error with PubkeyMismatch since c2 has
+        // a different embedded key — that's also the right rejection.
+        assert!(!proof.verify_with_pubkey(&c2, &trusted_pk2).unwrap_or(false));
+        // It must still pass for c1.
+        assert!(proof.verify_with_pubkey(&c1, &trusted_pk).unwrap());
     }
 
     // ── keypair operations ────────────────────────────────────────────────────
@@ -321,14 +423,15 @@ mod tests {
     fn test_with_keypair_embeds_correct_pubkey() {
         init_bls();
         let keypair = PQKeypair::generate();
-        let expected_pk = keypair.public_key_bytes().to_vec();
+        let expected_pk = DilithiumPubKey(keypair.public_key_bytes().to_vec());
 
         let mut tree = PQVerkleTree::with_keypair(keypair);
         tree.insert(b"x".to_vec(), b"y".to_vec()).unwrap();
         let commitment = tree.commit().unwrap();
+        let trusted_pk = tree.dilithium_pubkey();
 
-        assert_eq!(commitment.pq_pubkey, expected_pk);
-        assert!(commitment.verify_pq_signature().unwrap());
+        assert_eq!(commitment.pq_pubkey, expected_pk.0);
+        assert!(commitment.verify_against_pubkey(&trusted_pk).unwrap());
     }
 
     // ── get ──────────────────────────────────────────────────────────────────
@@ -401,15 +504,18 @@ mod tests {
         }
 
         let commitment = tree.commit().unwrap();
-        assert!(commitment.verify_pq_signature().unwrap());
+        let trusted_pk = tree.dilithium_pubkey();
+        assert!(commitment.verify_against_pubkey(&trusted_pk).unwrap());
 
         for i in 0..N {
             let proof = tree.prove(&[i]).unwrap().expect("key must exist");
             assert!(
-                proof.verify(&commitment).unwrap(),
+                proof.verify_with_pubkey(&commitment, &trusted_pk).unwrap(),
                 "proof failed for key {i}"
             );
-            let values = proof.verify_and_extract(&commitment).unwrap();
+            let values = proof
+                .verify_and_extract_with_pubkey(&commitment, &trusted_pk)
+                .unwrap();
             assert_eq!(
                 values[0],
                 vec![i.wrapping_mul(3)],
@@ -452,6 +558,7 @@ mod tests {
             let mut tree = PQVerkleTree::new();
             tree.insert(b"k".to_vec(), b"v".to_vec()).unwrap();
             let commitment = tree.commit().unwrap();
+            let trusted_pk = tree.dilithium_pubkey();
 
             let json = serde_json::to_string(&commitment).expect("serialize commitment");
             let restored: PQCommitment =
@@ -461,8 +568,12 @@ mod tests {
             assert_eq!(commitment.pq_signature, restored.pq_signature);
             assert_eq!(commitment.pq_pubkey, restored.pq_pubkey);
             assert!(
-                restored.verify_pq_signature().unwrap(),
-                "restored commitment signature must still verify"
+                restored.verify_embedded_key().unwrap(),
+                "restored commitment must pass self-consistency check"
+            );
+            assert!(
+                restored.verify_against_pubkey(&trusted_pk).unwrap(),
+                "restored commitment must pass trusted-key check"
             );
         }
 
@@ -472,6 +583,7 @@ mod tests {
             let mut tree = PQVerkleTree::new();
             tree.insert(b"hello".to_vec(), b"world".to_vec()).unwrap();
             let commitment = tree.commit().unwrap();
+            let trusted_pk = tree.dilithium_pubkey();
             let proof = tree.prove(b"hello").unwrap().expect("key exists");
 
             let json = serde_json::to_string(&proof).expect("serialize proof");
@@ -480,10 +592,14 @@ mod tests {
             assert_eq!(proof.keys(), restored.keys());
             assert_eq!(proof.pq_binding, restored.pq_binding);
             assert!(
-                restored.verify(&commitment).unwrap(),
-                "restored proof must verify against the original commitment"
+                restored
+                    .verify_with_pubkey(&commitment, &trusted_pk)
+                    .unwrap(),
+                "restored proof must verify against the trusted key"
             );
-            let values = restored.verify_and_extract(&commitment).unwrap();
+            let values = restored
+                .verify_and_extract_with_pubkey(&commitment, &trusted_pk)
+                .unwrap();
             assert_eq!(values[0], b"world");
         }
 
@@ -494,18 +610,70 @@ mod tests {
             tree.insert(b"a".to_vec(), b"1".to_vec()).unwrap();
             tree.insert(b"b".to_vec(), b"2".to_vec()).unwrap();
             let commitment = tree.commit().unwrap();
+            let trusted_pk = tree.dilithium_pubkey();
             let keys = vec![b"a".to_vec(), b"b".to_vec()];
             let proof = tree.prove_multiple(&keys).unwrap();
 
             let json = serde_json::to_string(&proof).expect("serialize multiproof");
             let restored: PQProof = serde_json::from_str(&json).expect("deserialize multiproof");
 
-            assert!(restored.verify(&commitment).unwrap());
-            let values = restored.verify_and_extract(&commitment).unwrap();
+            assert!(
+                restored
+                    .verify_with_pubkey(&commitment, &trusted_pk)
+                    .unwrap()
+            );
+            let values = restored
+                .verify_and_extract_with_pubkey(&commitment, &trusted_pk)
+                .unwrap();
             assert_eq!(values[0], b"1");
             assert_eq!(values[1], b"2");
         }
-    } // ── classical vs quantum-resistant comparison ─────────────────────────────
+    } // ── canonical key ordering & utility ────────────────────────────────────────
+
+    #[test]
+    fn test_canonical_keys_sorts_lexicographically() {
+        let mut keys = vec![
+            b"zzz".to_vec(),
+            b"aaa".to_vec(),
+            b"mmm".to_vec(),
+            b"aab".to_vec(),
+        ];
+        canonical_keys(&mut keys);
+        assert_eq!(
+            keys,
+            vec![
+                b"aaa".to_vec(),
+                b"aab".to_vec(),
+                b"mmm".to_vec(),
+                b"zzz".to_vec(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_commitment_digest_is_64_bytes() {
+        init_bls();
+        let mut tree = PQVerkleTree::new();
+        tree.insert(b"k".to_vec(), b"v".to_vec()).unwrap();
+        let commitment = tree.commit().unwrap();
+        let digest = commitment.commitment_digest();
+        assert_eq!(digest.len(), 64, "SHAKE-256 digest must be 64 bytes");
+        assert!(
+            digest.iter().any(|&b| b != 0),
+            "digest must not be all-zeros"
+        );
+    }
+
+    #[test]
+    fn test_dilithium_pubkey_newtype_matches_public_key_bytes() {
+        let tree = PQVerkleTree::new();
+        let pk_raw = tree.public_key_bytes().to_vec();
+        let pk_newtype = tree.dilithium_pubkey();
+        assert_eq!(pk_newtype.0, pk_raw);
+        assert_eq!(pk_newtype.as_ref(), pk_raw.as_slice());
+    }
+
+    // ── classical vs quantum-resistant comparison ─────────────────────────────
 
     /// Head-to-head comparison of classical `quilibrium_verkle` vs `PQVerkleTree`
     /// across performance, commitment size, and proof size.
@@ -585,6 +753,7 @@ mod tests {
         let t = Instant::now();
         let pq_commitment = pq.commit().expect("pq commit");
         let pq_commit_ms = t.elapsed().as_secs_f64() * 1_000.0;
+        let pq_trusted_pk = pq.dilithium_pubkey();
         let pq_commitment_bytes = pq_commitment.commitment.len();
         let pq_signature_bytes = pq_commitment.pq_signature.len();
         let pq_pubkey_bytes = pq_commitment.pq_pubkey.len();
@@ -605,7 +774,9 @@ mod tests {
             pq_binding_sizes.push(proof.pq_binding.len());
 
             let t = Instant::now();
-            let valid = proof.verify(&pq_commitment).expect("pq verify");
+            let valid = proof
+                .verify_with_pubkey(&pq_commitment, &pq_trusted_pk)
+                .expect("pq verify");
             pq_verify_ms.push(t.elapsed().as_secs_f64() * 1_000.0);
             assert!(valid, "pq proof must verify");
         }

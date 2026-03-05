@@ -32,4 +32,9 @@ pub enum PqVerkleError {
     /// Supplied signature bytes are the wrong length or otherwise invalid.
     #[error("Invalid Dilithium3 signature bytes")]
     InvalidSignature,
+
+    /// The commitment's embedded public key does not match the expected key.
+    /// This means the commitment was not produced by the trusted key holder.
+    #[error("Public key mismatch: commitment was not signed by the expected key")]
+    PubkeyMismatch,
 }
