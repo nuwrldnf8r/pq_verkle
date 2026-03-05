@@ -1,0 +1,40 @@
+[package]
+name = "verkle_pq"
+version = "0.1.0"
+edition = "2024"
+# edition 2024 requires Rust ≥ 1.85
+rust-version = "1.85"
+description = "Quantum-resistant Verkle tree library built on quilibrium-verkle with CRYSTALS-Dilithium3 (ML-DSA-65) post-quantum signatures and SHAKE-256 proof binding"
+license = "MIT"
+repository = "https://github.com/gavinmarshall/verkle-pq"
+keywords = ["verkle", "post-quantum", "dilithium", "cryptography", "zero-knowledge"]
+categories = ["cryptography", "authentication"]
+
+[lib]
+name = "verkle_pq"
+path = "src/lib.rs"
+
+[[bin]]
+name = "demo"
+path = "src/main.rs"
+
+[features]
+# Enables serde::Serialize / serde::Deserialize on PQCommitment and PQProof.
+serde = ["dep:serde"]
+
+[dependencies]
+quilibrium-verkle = "2.1.0"
+bls48581 = "2.1.0"
+# Dilithium3 = ML-DSA-65 (NIST FIPS 204). Security level 3 (≈ AES-192).
+pqcrypto-dilithium = "0.5"
+pqcrypto-traits = "0.3"
+sha3 = "0.10"
+thiserror = "1"
+hex = "0.4"
+zeroize = "1"
+serde = { version = "1", features = ["derive"], optional = true }
+
+[dev-dependencies]
+rand = "0.8"
+rand_chacha = "0.3"
+serde_json = "1"

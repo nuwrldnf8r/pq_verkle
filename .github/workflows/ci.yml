@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo registry & build artefacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Clippy (default features)
+        run: cargo clippy -- -D warnings
+
+      - name: Clippy (serde feature)
+        run: cargo clippy --features serde -- -D warnings
+
+      - name: Build (default features)
+        run: cargo build
+
+      - name: Build (serde feature)
+        run: cargo build --features serde
+
+      - name: Test (default features, single-threaded)
+        # BLS48-581 is CPU-heavy; single-threaded avoids timeout races.
+        run: cargo test -- --test-threads=1
+        timeout-minutes: 15
+
+      - name: Test (serde feature, single-threaded)
+        run: cargo test --features serde -- --test-threads=1
+        timeout-minutes: 15
+
+  msrv:
+    name: Minimum Supported Rust Version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install MSRV toolchain (1.85)
+        uses: dtolnay/rust-toolchain@1.85
+      - name: Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            target
+          key: msrv-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: Check MSRV build
+        # edition 2024 requires Rust ≥ 1.85; this job tracks that floor.
+        run: cargo check
