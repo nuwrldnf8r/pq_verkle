@@ -6,7 +6,7 @@ edition = "2024"
 rust-version = "1.85"
 description = "Quantum-resistant Verkle tree library built on quilibrium-verkle with CRYSTALS-Dilithium3 (ML-DSA-65) post-quantum signatures and SHAKE-256 proof binding"
 license = "MIT"
-repository = "https://github.com/gavinmarshall/verkle-pq"
+repository = "https://github.com/nuwrldnf8r/pq_verkle"
 keywords = ["verkle", "post-quantum", "dilithium", "cryptography", "zero-knowledge"]
 categories = ["cryptography", "authentication"]
 

@@ -1,6 +1,6 @@
 # verkle-pq
 
-[![CI](https://github.com/gavinmarshall/verkle-pq/actions/workflows/ci.yml/badge.svg)](https://github.com/gavinmarshall/verkle-pq/actions/workflows/ci.yml)
+[![CI](https://github.com/nuwrldnf8r/pq_verkle/actions/workflows/ci.yml/badge.svg)](https://github.com/nuwrldnf8r/pq_verkle/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/verkle_pq.svg)](https://crates.io/crates/verkle_pq)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
