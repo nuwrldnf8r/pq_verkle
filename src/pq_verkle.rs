@@ -310,10 +310,9 @@ impl PQVerkleTree {
             .as_ref()
             .ok_or(PqVerkleError::NoCommitment)?;
 
-        let inner = self
-            .inner
-            .prove_multiple(keys)
-            .ok_or_else(|| PqVerkleError::VerkleError("prove_multiple() returned None".to_string()))?;
+        let inner = self.inner.prove_multiple(keys).ok_or_else(|| {
+            PqVerkleError::VerkleError("prove_multiple() returned None".to_string())
+        })?;
 
         let pq_binding = proof_binding(commitment, keys);
 
@@ -351,10 +350,7 @@ struct PQProofBytes {
 #[cfg(feature = "serde")]
 impl serde::Serialize for PQProof {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let inner_bytes = self
-            .inner
-            .to_bytes()
-            .map_err(serde::ser::Error::custom)?;
+        let inner_bytes = self.inner.to_bytes().map_err(serde::ser::Error::custom)?;
         PQProofBytes {
             keys: self.keys.clone(),
             pq_binding: self.pq_binding.clone(),
@@ -368,8 +364,7 @@ impl serde::Serialize for PQProof {
 impl<'de> serde::Deserialize<'de> for PQProof {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let b = PQProofBytes::deserialize(deserializer)?;
-        let inner = TraversalProof::from_bytes(&b.inner_bytes)
-            .map_err(serde::de::Error::custom)?;
+        let inner = TraversalProof::from_bytes(&b.inner_bytes).map_err(serde::de::Error::custom)?;
         Ok(PQProof {
             keys: b.keys,
             pq_binding: b.pq_binding,

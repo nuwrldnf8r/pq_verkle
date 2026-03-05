@@ -1,6 +1,6 @@
 use sha3::{
-    digest::{ExtendableOutput, Update, XofReader},
     Shake256,
+    digest::{ExtendableOutput, Update, XofReader},
 };
 
 // Domain-separation prefixes prevent hash outputs in one context from being

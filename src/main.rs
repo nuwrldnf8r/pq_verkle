@@ -32,7 +32,10 @@ fn main() {
 
     let proof = tree.prove(b"name").unwrap().expect("key must exist");
     let values = proof.verify_and_extract(&commitment).unwrap();
-    println!("Proven value for 'name': {:?}", String::from_utf8_lossy(&values[0]));
+    println!(
+        "Proven value for 'name': {:?}",
+        String::from_utf8_lossy(&values[0])
+    );
     assert_eq!(values[0], b"alice");
 
     // Missing key returns None (no proof possible).
@@ -70,10 +73,15 @@ fn main() {
     let pk_bytes = keypair.public_key_bytes().to_vec();
 
     let mut tree2 = PQVerkleTree::with_keypair(keypair);
-    tree2.insert(b"token".to_vec(), b"0xDEADBEEF".to_vec()).unwrap();
+    tree2
+        .insert(b"token".to_vec(), b"0xDEADBEEF".to_vec())
+        .unwrap();
     let c2 = tree2.commit().unwrap();
     assert_eq!(c2.pq_pubkey, pk_bytes);
-    println!("Commitment signed with expected keypair: {}", c2.verify_pq_signature().unwrap());
+    println!(
+        "Commitment signed with expected keypair: {}",
+        c2.verify_pq_signature().unwrap()
+    );
 
     println!("\nAll demo assertions passed!");
 }

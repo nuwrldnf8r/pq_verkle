@@ -1,4 +1,3 @@
-
 //! # verkle-pq
 //!
 //! A quantum-resistant Verkle tree library that wraps
@@ -59,7 +58,6 @@
 //! assert_eq!(all[1], b"value2");
 //! ```
 
-
 pub mod error;
 pub mod pq_hash;
 pub mod pq_sign;
@@ -119,11 +117,8 @@ mod tests {
     fn test_multiple_keys_single_proof_each() {
         init_bls();
         let mut tree = PQVerkleTree::new();
-        let pairs: Vec<(&[u8], &[u8])> = vec![
-            (b"alpha", b"100"),
-            (b"beta", b"200"),
-            (b"gamma", b"300"),
-        ];
+        let pairs: Vec<(&[u8], &[u8])> =
+            vec![(b"alpha", b"100"), (b"beta", b"200"), (b"gamma", b"300")];
         for (k, v) in &pairs {
             tree.insert(k.to_vec(), v.to_vec()).unwrap();
         }
@@ -131,7 +126,10 @@ mod tests {
 
         for (k, v) in &pairs {
             let proof = tree.prove(k).unwrap().expect("key should exist");
-            assert!(proof.verify(&commitment).unwrap(), "verify failed for {k:?}");
+            assert!(
+                proof.verify(&commitment).unwrap(),
+                "verify failed for {k:?}"
+            );
             let values = proof.verify_and_extract(&commitment).unwrap();
             assert_eq!(values[0], v.to_vec(), "value mismatch for {k:?}");
         }
@@ -262,7 +260,10 @@ mod tests {
         let keys = vec![vec![1u8], vec![2u8], vec![3u8]];
         let proof = tree.prove_multiple(&keys).unwrap();
 
-        assert!(proof.verify(&commitment).unwrap(), "multiproof verify failed");
+        assert!(
+            proof.verify(&commitment).unwrap(),
+            "multiproof verify failed"
+        );
         let values = proof.verify_and_extract(&commitment).unwrap();
         assert_eq!(values, vec![vec![10u8], vec![20u8], vec![30u8]]);
     }
@@ -504,7 +505,7 @@ mod tests {
             assert_eq!(values[0], b"1");
             assert_eq!(values[1], b"2");
         }
-    }    // ── classical vs quantum-resistant comparison ─────────────────────────────
+    } // ── classical vs quantum-resistant comparison ─────────────────────────────
 
     /// Head-to-head comparison of classical `quilibrium_verkle` vs `PQVerkleTree`
     /// across performance, commitment size, and proof size.
@@ -535,7 +536,9 @@ mod tests {
         let t = Instant::now();
         let mut classical = VectorCommitmentTrie::new();
         for (k, v) in &pairs {
-            classical.insert(k.clone(), v.clone()).expect("classical insert");
+            classical
+                .insert(k.clone(), v.clone())
+                .expect("classical insert");
         }
         let classical_insert_ms = t.elapsed().as_secs_f64() * 1_000.0;
 
@@ -559,7 +562,9 @@ mod tests {
             classical_proof_sizes.push(bytes.len());
 
             let t = Instant::now();
-            let valid = proof.verify(&classical_commitment).expect("classical verify");
+            let valid = proof
+                .verify(&classical_commitment)
+                .expect("classical verify");
             classical_verify_ms.push(t.elapsed().as_secs_f64() * 1_000.0);
             assert!(valid, "classical proof must verify");
         }
@@ -582,14 +587,13 @@ mod tests {
         let pq_commit_ms = t.elapsed().as_secs_f64() * 1_000.0;
         let pq_commitment_bytes = pq_commitment.commitment.len();
         let pq_signature_bytes = pq_commitment.pq_signature.len();
-        let pq_pubkey_bytes     = pq_commitment.pq_pubkey.len();
-        let pq_total_commitment_bytes =
-            pq_commitment_bytes + pq_signature_bytes + pq_pubkey_bytes;
+        let pq_pubkey_bytes = pq_commitment.pq_pubkey.len();
+        let pq_total_commitment_bytes = pq_commitment_bytes + pq_signature_bytes + pq_pubkey_bytes;
 
         // Prove
-        let mut pq_prove_ms: Vec<f64>   = Vec::with_capacity(N);
-        let mut pq_verify_ms: Vec<f64>  = Vec::with_capacity(N);
-        let mut pq_inner_sizes: Vec<usize>   = Vec::with_capacity(N);
+        let mut pq_prove_ms: Vec<f64> = Vec::with_capacity(N);
+        let mut pq_verify_ms: Vec<f64> = Vec::with_capacity(N);
+        let mut pq_inner_sizes: Vec<usize> = Vec::with_capacity(N);
         let mut pq_binding_sizes: Vec<usize> = Vec::with_capacity(N);
 
         for (k, _) in &pairs {
@@ -624,56 +628,102 @@ mod tests {
         let ratio = |pq: f64, cl: f64| if cl > 0.0 { pq / cl } else { f64::NAN };
 
         // Timings
-        println!("║ Insert ({N} keys)               ║ {:>9.3} ms ║ {:>9.3} ms ║ {:>5.2}×║",
-            classical_insert_ms, pq_insert_ms,
-            ratio(pq_insert_ms, classical_insert_ms));
-        println!("║ Commit                        ║ {:>9.3} ms ║ {:>9.3} ms ║ {:>5.2}×║",
-            classical_commit_ms, pq_commit_ms,
-            ratio(pq_commit_ms, classical_commit_ms));
-        println!("║ Prove/key (avg)               ║ {:>9.3} ms ║ {:>9.3} ms ║ {:>5.2}×║",
-            mean(&classical_prove_ms), mean(&pq_prove_ms),
-            ratio(mean(&pq_prove_ms), mean(&classical_prove_ms)));
-        println!("║ Prove total ({N} keys)          ║ {:>9.3} ms ║ {:>9.3} ms ║ {:>5.2}×║",
-            total(&classical_prove_ms), total(&pq_prove_ms),
-            ratio(total(&pq_prove_ms), total(&classical_prove_ms)));
-        println!("║ Verify/key (avg)              ║ {:>9.3} ms ║ {:>9.3} ms ║ {:>5.2}×║",
-            mean(&classical_verify_ms), mean(&pq_verify_ms),
-            ratio(mean(&pq_verify_ms), mean(&classical_verify_ms)));
+        println!(
+            "║ Insert ({N} keys)               ║ {:>9.3} ms ║ {:>9.3} ms ║ {:>5.2}×║",
+            classical_insert_ms,
+            pq_insert_ms,
+            ratio(pq_insert_ms, classical_insert_ms)
+        );
+        println!(
+            "║ Commit                        ║ {:>9.3} ms ║ {:>9.3} ms ║ {:>5.2}×║",
+            classical_commit_ms,
+            pq_commit_ms,
+            ratio(pq_commit_ms, classical_commit_ms)
+        );
+        println!(
+            "║ Prove/key (avg)               ║ {:>9.3} ms ║ {:>9.3} ms ║ {:>5.2}×║",
+            mean(&classical_prove_ms),
+            mean(&pq_prove_ms),
+            ratio(mean(&pq_prove_ms), mean(&classical_prove_ms))
+        );
+        println!(
+            "║ Prove total ({N} keys)          ║ {:>9.3} ms ║ {:>9.3} ms ║ {:>5.2}×║",
+            total(&classical_prove_ms),
+            total(&pq_prove_ms),
+            ratio(total(&pq_prove_ms), total(&classical_prove_ms))
+        );
+        println!(
+            "║ Verify/key (avg)              ║ {:>9.3} ms ║ {:>9.3} ms ║ {:>5.2}×║",
+            mean(&classical_verify_ms),
+            mean(&pq_verify_ms),
+            ratio(mean(&pq_verify_ms), mean(&classical_verify_ms))
+        );
         println!("╠═══════════════════════════════╬══════════════╬══════════════╬═══════╣");
 
         // Sizes
-        println!("║ Commitment (raw KZG bytes)    ║ {:>9} B  ║ {:>9} B  ║ {:>5.2}×║",
-            classical_commitment_bytes, pq_commitment_bytes,
-            ratio(pq_commitment_bytes as f64, classical_commitment_bytes as f64));
-        println!("║ PQ signature (Dilithium3)     ║ {:>12} ║ {:>9} B  ║   N/A ║",
-            "—", pq_signature_bytes);
-        println!("║ PQ public key (embedded)      ║ {:>12} ║ {:>9} B  ║   N/A ║",
-            "—", pq_pubkey_bytes);
-        println!("║ Total commitment package      ║ {:>9} B  ║ {:>9} B  ║ {:>5.2}×║",
-            classical_commitment_bytes, pq_total_commitment_bytes,
-            ratio(pq_total_commitment_bytes as f64, classical_commitment_bytes as f64));
+        println!(
+            "║ Commitment (raw KZG bytes)    ║ {:>9} B  ║ {:>9} B  ║ {:>5.2}×║",
+            classical_commitment_bytes,
+            pq_commitment_bytes,
+            ratio(
+                pq_commitment_bytes as f64,
+                classical_commitment_bytes as f64
+            )
+        );
+        println!(
+            "║ PQ signature (Dilithium3)     ║ {:>12} ║ {:>9} B  ║   N/A ║",
+            "—", pq_signature_bytes
+        );
+        println!(
+            "║ PQ public key (embedded)      ║ {:>12} ║ {:>9} B  ║   N/A ║",
+            "—", pq_pubkey_bytes
+        );
+        println!(
+            "║ Total commitment package      ║ {:>9} B  ║ {:>9} B  ║ {:>5.2}×║",
+            classical_commitment_bytes,
+            pq_total_commitment_bytes,
+            ratio(
+                pq_total_commitment_bytes as f64,
+                classical_commitment_bytes as f64
+            )
+        );
         println!("╠═══════════════════════════════╬══════════════╬══════════════╬═══════╣");
-        println!("║ Proof bytes/key (avg)         ║ {:>9} B  ║ {:>9} B  ║ {:>5.2}×║",
+        println!(
+            "║ Proof bytes/key (avg)         ║ {:>9} B  ║ {:>9} B  ║ {:>5.2}×║",
             mean_sz(&classical_proof_sizes),
             mean_sz(&pq_inner_sizes),
-            ratio(mean_sz(&pq_inner_sizes) as f64, mean_sz(&classical_proof_sizes) as f64));
-        println!("║ PQ binding tag/key (avg)      ║ {:>12} ║ {:>9} B  ║   N/A ║",
-            "—", mean_sz(&pq_binding_sizes));
-        println!("║ Total proof package/key (avg) ║ {:>9} B  ║ {:>9} B  ║ {:>5.2}×║",
+            ratio(
+                mean_sz(&pq_inner_sizes) as f64,
+                mean_sz(&classical_proof_sizes) as f64
+            )
+        );
+        println!(
+            "║ PQ binding tag/key (avg)      ║ {:>12} ║ {:>9} B  ║   N/A ║",
+            "—",
+            mean_sz(&pq_binding_sizes)
+        );
+        println!(
+            "║ Total proof package/key (avg) ║ {:>9} B  ║ {:>9} B  ║ {:>5.2}×║",
             mean_sz(&classical_proof_sizes),
             mean_sz(&pq_inner_sizes) + mean_sz(&pq_binding_sizes),
             ratio(
                 (mean_sz(&pq_inner_sizes) + mean_sz(&pq_binding_sizes)) as f64,
                 mean_sz(&classical_proof_sizes) as f64,
-            ));
+            )
+        );
         println!("╚═══════════════════════════════╩══════════════╩══════════════╩═══════╝");
         println!();
         println!("Notes:");
         println!("  • Timings are wall-clock (debug build, single core, macOS).");
         println!("  • Inner proof bytes are identical for PQ-safe tree (same KZG core).");
-        println!("  • PQ overhead = Dilithium3 sig ({pq_signature_bytes} B) + pubkey ({pq_pubkey_bytes} B)");
-        println!("    in the commitment, plus SHAKE-256 binding tag ({} B) per proof.",
-            mean_sz(&pq_binding_sizes));
+        println!(
+            "  • PQ overhead = Dilithium3 sig ({pq_signature_bytes} B) + pubkey ({pq_pubkey_bytes} B)"
+        );
+        println!(
+            "    in the commitment, plus SHAKE-256 binding tag ({} B) per proof.",
+            mean_sz(&pq_binding_sizes)
+        );
         println!("  • Neither tree provides quantum security on the KZG layer itself; the");
         println!("    PQ layers bind and authenticate commitments against quantum forgery.");
-    }}
+    }
+}
