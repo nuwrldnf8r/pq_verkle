@@ -2,9 +2,53 @@ use quilibrium_verkle::{TraversalProof, VectorCommitmentTrie};
 
 use crate::{
     error::PqVerkleError,
-    pq_hash::{commitment_sign_message, proof_binding},
+    pq_hash::{canonical_keys, commitment_sign_message, proof_binding},
     pq_sign::PQKeypair,
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Newtypes
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The 74-byte KZG Verkle root commitment.
+///
+/// Using a newtype prevents accidentally passing raw commitment bytes where a
+/// signature or public key is expected.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct CommitmentBytes(pub Vec<u8>);
+
+impl AsRef<[u8]> for CommitmentBytes {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+/// A Dilithium3 (ML-DSA-65) public key (1952 bytes).
+///
+/// Share this with verifiers so they can call
+/// [`PQCommitment::verify_against_pubkey`] to authenticate commitments
+/// without holding the secret key.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct DilithiumPubKey(pub Vec<u8>);
+
+impl AsRef<[u8]> for DilithiumPubKey {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+/// A Dilithium3 (ML-DSA-65) detached signature (3293 bytes).
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct DilithiumSignature(pub Vec<u8>);
+
+impl AsRef<[u8]> for DilithiumSignature {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PQCommitment
@@ -14,8 +58,23 @@ use crate::{
 ///
 /// The 74-byte KZG commitment produced by the underlying
 /// [`quilibrium_verkle`] trie is signed with a Dilithium3 (ML-DSA-65) key.
-/// Any party holding the embedded `pq_pubkey` can verify the signature without
-/// interacting with the tree owner, even on a future quantum computer.
+///
+/// ## Public-key trust
+///
+/// The commitment embeds the signer's public key for convenience, but
+/// **embedding alone does not prove authority**.  An attacker can attach
+/// their own key and produce a self-consistent commitment.  Always verify
+/// against a *trusted* public key obtained out-of-band:
+///
+/// ```no_run
+/// # let commitment: verkle_pq::PQCommitment = unimplemented!();
+/// # let trusted_pk: verkle_pq::DilithiumPubKey = unimplemented!();
+/// // Correct: checks against the key you already trust.
+/// let ok = commitment.verify_against_pubkey(&trusted_pk).unwrap();
+///
+/// // Self-consistency only: adequate for tamper detection, not authentication.
+/// let ok = commitment.verify_embedded_key().unwrap();
+/// ```
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PQCommitment {
@@ -27,19 +86,47 @@ pub struct PQCommitment {
     pub pq_signature: Vec<u8>,
 
     /// Dilithium3 public key (1952 bytes) used to produce the signature.
-    /// Embed this in your certificate / protocol handshake so verifiers do
-    /// not need an out-of-band PKI lookup.
     pub pq_pubkey: Vec<u8>,
 }
 
 impl PQCommitment {
-    /// Verify the post-quantum signature embedded in this commitment.
+    /// Check self-consistency: verify the embedded signature against the
+    /// embedded public key.
     ///
-    /// Returns `true` if the signature is valid for the embedded public key
-    /// and would therefore have been produced by the owner of the private key.
-    pub fn verify_pq_signature(&self) -> Result<bool, PqVerkleError> {
+    /// **This does not prove authority.** Use [`verify_against_pubkey`] with a
+    /// key you obtained out-of-band to authenticate the commitment's origin.
+    pub fn verify_embedded_key(&self) -> Result<bool, PqVerkleError> {
         let msg = commitment_sign_message(&self.commitment);
         PQKeypair::verify_with_pubkey(&msg, &self.pq_signature, &self.pq_pubkey)
+    }
+
+    /// Verify the signature against a *trusted* expected public key.
+    ///
+    /// Returns `Ok(true)` only when:
+    /// 1. The embedded public key matches `expected_pk`, and
+    /// 2. The embedded signature is valid for that key.
+    ///
+    /// This is the correct entrypoint for authentication: use the public key
+    /// you obtained from a trusted source (PKI, on-chain record, certificate).
+    pub fn verify_against_pubkey(
+        &self,
+        expected_pk: &DilithiumPubKey,
+    ) -> Result<bool, PqVerkleError> {
+        if self.pq_pubkey != expected_pk.0 {
+            return Err(PqVerkleError::PubkeyMismatch);
+        }
+        let msg = commitment_sign_message(&self.commitment);
+        PQKeypair::verify_with_pubkey(&msg, &self.pq_signature, &self.pq_pubkey)
+    }
+
+    /// The SHAKE-256 digest that was signed to produce the Dilithium3
+    /// signature.
+    ///
+    /// Expose this for HSM / external signing flows where you need to sign
+    /// the commitment digest with your own hardware key rather than using the
+    /// built-in signer.
+    pub fn commitment_digest(&self) -> Vec<u8> {
+        commitment_sign_message(&self.commitment)
     }
 
     /// Returns the raw KZG commitment bytes.
@@ -73,62 +160,93 @@ pub struct PQProof {
 }
 
 impl PQProof {
-    /// Verify this proof against a [`PQCommitment`].
+    /// Verify this proof against a [`PQCommitment`], checking self-consistency
+    /// only (embedded key).
     ///
-    /// Three checks are performed in order:
+    /// ⚠️  For authenticated verification, use [`verify_with_pubkey`] and
+    /// supply the public key you trust out-of-band.
     ///
-    /// 1. **PQ signature** — the Dilithium3 signature on the commitment must
-    ///    be valid for the embedded public key.
-    /// 2. **Binding tag** — the stored binding tag must equal the one
-    ///    recomputed from `commitment` and `self.keys()`.
-    /// 3. **Verkle proof** — the inner KZG traversal proof must verify against
-    ///    the raw commitment bytes.
-    ///
-    /// Returns `Ok(true)` only when all three pass.
+    /// Three checks are performed:
+    /// 1. **Embedded-key signature** — the commitment's own embedded key.
+    /// 2. **Binding tag** — SHAKE-256 tag over `(commitment || sorted keys)`.
+    /// 3. **Verkle proof** — inner KZG traversal proof.
     pub fn verify(&self, commitment: &PQCommitment) -> Result<bool, PqVerkleError> {
-        // 1. Check the PQ signature on the commitment.
-        if !commitment.verify_pq_signature()? {
+        if !commitment.verify_embedded_key()? {
             return Ok(false);
         }
-
-        // 2. Check the proof binding tag.
         let expected = proof_binding(&commitment.commitment, &self.keys);
         if self.pq_binding != expected {
             return Ok(false);
         }
-
-        // 3. Verify the inner Verkle proof.
         self.inner
             .verify(&commitment.commitment)
             .map_err(|e| PqVerkleError::VerkleError(format!("{e:?}")))
     }
 
-    /// Verify this proof and extract the proven values.
+    /// Verify this proof against a *trusted* expected public key.
     ///
-    /// Performs the same three checks as [`verify()`], then returns the values
-    /// associated with each key in `self.keys()` order.
+    /// This is the correct verification entrypoint for production use.
+    /// `expected_pk` must be the [`DilithiumPubKey`] you obtained from a
+    /// trusted source (PKI, on-chain record, certificate).
+    ///
+    /// Three checks are performed:
+    /// 1. **Trusted-key signature** — commitment's embedded key must equal
+    ///    `expected_pk` and the signature must be valid for it.
+    /// 2. **Binding tag** — SHAKE-256 tag over `(commitment || sorted keys)`.
+    /// 3. **Verkle proof** — inner KZG traversal proof.
+    pub fn verify_with_pubkey(
+        &self,
+        commitment: &PQCommitment,
+        expected_pk: &DilithiumPubKey,
+    ) -> Result<bool, PqVerkleError> {
+        if !commitment.verify_against_pubkey(expected_pk)? {
+            return Ok(false);
+        }
+        let expected = proof_binding(&commitment.commitment, &self.keys);
+        if self.pq_binding != expected {
+            return Ok(false);
+        }
+        self.inner
+            .verify(&commitment.commitment)
+            .map_err(|e| PqVerkleError::VerkleError(format!("{e:?}")))
+    }
+
+    /// Verify this proof (embedded-key) and extract the proven values.
+    ///
+    /// ⚠️  For authenticated verification, use [`verify_and_extract_with_pubkey`].
     pub fn verify_and_extract(
         &self,
         commitment: &PQCommitment,
     ) -> Result<Vec<Vec<u8>>, PqVerkleError> {
-        // 1. PQ signature.
-        if !commitment.verify_pq_signature()? {
+        if !commitment.verify_embedded_key()? {
             return Err(PqVerkleError::PqVerificationFailed);
         }
-
-        // 2. Binding tag.
         let expected = proof_binding(&commitment.commitment, &self.keys);
         if self.pq_binding != expected {
             return Err(PqVerkleError::BindingMismatch);
         }
-
-        // 3. Extract values from the inner proof.
         self.inner
             .verify_and_extract(&commitment.commitment)
             .map_err(|e| PqVerkleError::VerkleError(format!("{e:?}")))
     }
 
-    /// The key(s) covered by this proof.
+    /// Verify this proof against a trusted pubkey and extract the proven values.
+    pub fn verify_and_extract_with_pubkey(
+        &self,
+        commitment: &PQCommitment,
+        expected_pk: &DilithiumPubKey,
+    ) -> Result<Vec<Vec<u8>>, PqVerkleError> {
+        commitment.verify_against_pubkey(expected_pk)?;
+        let expected = proof_binding(&commitment.commitment, &self.keys);
+        if self.pq_binding != expected {
+            return Err(PqVerkleError::BindingMismatch);
+        }
+        self.inner
+            .verify_and_extract(&commitment.commitment)
+            .map_err(|e| PqVerkleError::VerkleError(format!("{e:?}")))
+    }
+
+    /// The key(s) covered by this proof, in canonical (sorted) order.
     pub fn keys(&self) -> &[Vec<u8>] {
         &self.keys
     }
@@ -172,16 +290,19 @@ impl PQProof {
 ///
 /// ```no_run
 /// # bls48581::init();
-/// use verkle_pq::PQVerkleTree;
+/// use verkle_pq::{DilithiumPubKey, PQVerkleTree};
 ///
 /// let mut tree = PQVerkleTree::new();
 /// tree.insert(b"name".to_vec(), b"alice".to_vec()).unwrap();
 ///
 /// let commitment = tree.commit().unwrap();
-/// assert!(commitment.verify_pq_signature().unwrap());
+/// let trusted_pk: DilithiumPubKey = tree.dilithium_pubkey();
+///
+/// // Authenticated verification against the trusted key.
+/// assert!(commitment.verify_against_pubkey(&trusted_pk).unwrap());
 ///
 /// let proof = tree.prove(b"name").unwrap().expect("key exists");
-/// let values = proof.verify_and_extract(&commitment).unwrap();
+/// let values = proof.verify_and_extract_with_pubkey(&commitment, &trusted_pk).unwrap();
 /// assert_eq!(values[0], b"alice");
 /// ```
 pub struct PQVerkleTree {
@@ -221,6 +342,14 @@ impl PQVerkleTree {
     /// proofs produced by this tree without holding the secret key.
     pub fn public_key_bytes(&self) -> &[u8] {
         self.keypair.public_key_bytes()
+    }
+
+    /// Returns the Dilithium3 public key as a [`DilithiumPubKey`] newtype.
+    ///
+    /// Pass this to [`PQCommitment::verify_against_pubkey`] and
+    /// [`PQProof::verify_with_pubkey`] for authenticated verification.
+    pub fn dilithium_pubkey(&self) -> DilithiumPubKey {
+        DilithiumPubKey(self.keypair.public_key_bytes().to_vec())
     }
 
     /// Insert a key-value pair into the trie.
@@ -299,28 +428,108 @@ impl PQVerkleTree {
 
     /// Generate a multi-key inclusion proof bound to the current commitment.
     ///
-    /// All keys **must** exist in the trie; keys that are absent cause the
-    /// underlying library to return an error.
+    /// Keys are sorted into canonical lexicographic order before the proof
+    /// is generated.  The caller does **not** need to pre-sort; the sorted
+    /// order is recorded inside the [`PQProof`] and must be used when
+    /// verifying.  Use [`canonical_keys`] on the verifier side if you need
+    /// to reconstruct the same ordering.
     ///
-    /// This is more efficient than generating one proof per key: the KZG
-    /// multiproof combines all openings into a single constant-size artifact.
+    /// All keys **must** exist in the trie; absent keys cause the underlying
+    /// library to return an error.
     pub fn prove_multiple(&mut self, keys: &[Vec<u8>]) -> Result<PQProof, PqVerkleError> {
         let commitment = self
             .last_commitment
             .as_ref()
             .ok_or(PqVerkleError::NoCommitment)?;
 
-        let inner = self.inner.prove_multiple(keys).ok_or_else(|| {
+        // Canonical sort: ensures binding tag is order-independent.
+        let mut sorted_keys = keys.to_vec();
+        canonical_keys(&mut sorted_keys);
+
+        let inner = self.inner.prove_multiple(&sorted_keys).ok_or_else(|| {
             PqVerkleError::VerkleError("prove_multiple() returned None".to_string())
         })?;
 
-        let pq_binding = proof_binding(commitment, keys);
+        let pq_binding = proof_binding(commitment, &sorted_keys);
 
         Ok(PQProof {
-            keys: keys.to_vec(),
+            keys: sorted_keys,
             pq_binding,
             inner,
         })
+    }
+
+    /// Prove a batch of independent single-key proofs.
+    ///
+    /// Without the `rayon` feature this is equivalent to calling [`prove`]
+    /// for each key in sequence.  With `--features rayon`, proofs are
+    /// generated concurrently (one clone of the inner tree per rayon worker
+    /// thread).  Requires [`commit`] to have been called first.
+    ///
+    /// Returns one [`PQProof`] per input key in the same order as `keys`.
+    /// Returns `Err` if any key is absent from the trie.
+    pub fn prove_batch(
+        &mut self,
+        keys: &[Vec<u8>],
+    ) -> Result<Vec<PQProof>, PqVerkleError> {
+        let commitment = self
+            .last_commitment
+            .as_ref()
+            .ok_or(PqVerkleError::NoCommitment)?
+            .clone();
+
+        // Inner sequential helper — used directly without rayon, and as the
+        // per-chunk body with rayon.
+        fn prove_sequential(
+            inner: &mut VectorCommitmentTrie,
+            commitment: &[u8],
+            keys: &[Vec<u8>],
+        ) -> Result<Vec<PQProof>, PqVerkleError> {
+            keys.iter()
+                .map(|key| {
+                    let inner_proof = inner.prove(key).ok_or_else(|| {
+                        PqVerkleError::VerkleError(format!(
+                            "key not found in prove_batch: {}",
+                            hex::encode(key)
+                        ))
+                    })?;
+                    let ks = vec![key.clone()];
+                    let pb = proof_binding(commitment, &ks);
+                    Ok(PQProof {
+                        keys: ks,
+                        pq_binding: pb,
+                        inner: inner_proof,
+                    })
+                })
+                .collect()
+        }
+
+        #[cfg(feature = "rayon")]
+        {
+            use rayon::prelude::*;
+
+            // Divide keys into one chunk per rayon thread.  Each chunk gets
+            // its own clone of the inner tree so threads never share state.
+            let num_threads = rayon::current_num_threads().max(1);
+            let chunk_size = keys.len().div_ceil(num_threads).max(1);
+
+            // Pre-clone on the main thread (sequential) then ship to rayon.
+            let chunks: Vec<(Vec<Vec<u8>>, VectorCommitmentTrie)> = keys
+                .chunks(chunk_size)
+                .map(|c| (c.to_vec(), self.inner.clone()))
+                .collect();
+
+            chunks
+                .into_par_iter()
+                .map(|(chunk_keys, mut local_inner)| {
+                    prove_sequential(&mut local_inner, &commitment, &chunk_keys)
+                })
+                .collect::<Result<Vec<Vec<PQProof>>, _>>()
+                .map(|nested| nested.into_iter().flatten().collect())
+        }
+
+        #[cfg(not(feature = "rayon"))]
+        prove_sequential(&mut self.inner, &commitment, keys)
     }
 }
 
