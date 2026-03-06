@@ -46,4 +46,4 @@ rayon = "1"
 # Patch quilibrium-verkle to add #[derive(Clone)] to VectorCommitmentTrie.
 # All fields already implement Clone; the upstream crate simply omitted the derive.
 [patch.crates-io]
-quilibrium-verkle = { path = "../vendor/quilibrium-verkle" }
+quilibrium-verkle = { path = "vendor/quilibrium-verkle" }

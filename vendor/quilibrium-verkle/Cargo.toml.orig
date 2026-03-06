@@ -1,0 +1,40 @@
+[package]
+name = "quilibrium-verkle"
+version = "2.1.0"
+edition = "2021"
+authors = ["Quilibrium Inc."]
+description = "Verkle trie implementation with KZG commitments for Quilibrium"
+license = "MIT"
+repository = "https://github.com/quilibriumnetwork/quilibrium-rs-sdk-verkle"
+keywords = ["verkle", "trie", "kzg", "commitment", "cryptography"]
+categories = ["cryptography", "data-structures", "algorithms"]
+readme = "README.md"
+
+[dependencies]
+# Cryptography
+bls48581 = "2.1.0"
+sha2 = "0.10"
+poseidon-rs = "0.0.10"
+ff_ce = "0.11"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+borsh = { version = "1.5", features = ["derive"] }
+
+# Utilities
+num-bigint = "0.4"
+hex = "0.4"
+thiserror = "2.0"
+anyhow = "1.0"
+
+# RDF parsing for schema support
+oxrdf = "0.2"
+oxttl = "0.1"
+
+[dev-dependencies]
+# No additional dev dependencies needed
+
+[lib]
+name = "quilibrium_verkle"
+path = "src/lib.rs"
