@@ -458,6 +458,79 @@ impl PQVerkleTree {
             inner,
         })
     }
+
+    /// Prove a batch of independent single-key proofs.
+    ///
+    /// Without the `rayon` feature this is equivalent to calling [`prove`]
+    /// for each key in sequence.  With `--features rayon`, proofs are
+    /// generated concurrently (one clone of the inner tree per rayon worker
+    /// thread).  Requires [`commit`] to have been called first.
+    ///
+    /// Returns one [`PQProof`] per input key in the same order as `keys`.
+    /// Returns `Err` if any key is absent from the trie.
+    pub fn prove_batch(
+        &mut self,
+        keys: &[Vec<u8>],
+    ) -> Result<Vec<PQProof>, PqVerkleError> {
+        let commitment = self
+            .last_commitment
+            .as_ref()
+            .ok_or(PqVerkleError::NoCommitment)?
+            .clone();
+
+        // Inner sequential helper — used directly without rayon, and as the
+        // per-chunk body with rayon.
+        fn prove_sequential(
+            inner: &mut VectorCommitmentTrie,
+            commitment: &[u8],
+            keys: &[Vec<u8>],
+        ) -> Result<Vec<PQProof>, PqVerkleError> {
+            keys.iter()
+                .map(|key| {
+                    let inner_proof = inner.prove(key).ok_or_else(|| {
+                        PqVerkleError::VerkleError(format!(
+                            "key not found in prove_batch: {}",
+                            hex::encode(key)
+                        ))
+                    })?;
+                    let ks = vec![key.clone()];
+                    let pb = proof_binding(commitment, &ks);
+                    Ok(PQProof {
+                        keys: ks,
+                        pq_binding: pb,
+                        inner: inner_proof,
+                    })
+                })
+                .collect()
+        }
+
+        #[cfg(feature = "rayon")]
+        {
+            use rayon::prelude::*;
+
+            // Divide keys into one chunk per rayon thread.  Each chunk gets
+            // its own clone of the inner tree so threads never share state.
+            let num_threads = rayon::current_num_threads().max(1);
+            let chunk_size = keys.len().div_ceil(num_threads).max(1);
+
+            // Pre-clone on the main thread (sequential) then ship to rayon.
+            let chunks: Vec<(Vec<Vec<u8>>, VectorCommitmentTrie)> = keys
+                .chunks(chunk_size)
+                .map(|c| (c.to_vec(), self.inner.clone()))
+                .collect();
+
+            chunks
+                .into_par_iter()
+                .map(|(chunk_keys, mut local_inner)| {
+                    prove_sequential(&mut local_inner, &commitment, &chunk_keys)
+                })
+                .collect::<Result<Vec<Vec<PQProof>>, _>>()
+                .map(|nested| nested.into_iter().flatten().collect())
+        }
+
+        #[cfg(not(feature = "rayon"))]
+        prove_sequential(&mut self.inner, &commitment, keys)
+    }
 }
 
 impl Default for PQVerkleTree {
