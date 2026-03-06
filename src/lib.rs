@@ -767,14 +767,13 @@ mod tests {
         let cl_big_prove_ms = t.elapsed().as_secs_f64() * 1_000.0;
 
         let t = Instant::now();
-        let pq_big_proof = pq_big
-            .prove(sample_key)
-            .unwrap()
-            .expect("key must exist");
+        let pq_big_proof = pq_big.prove(sample_key).unwrap().expect("key must exist");
         let pq_big_prove_ms = t.elapsed().as_secs_f64() * 1_000.0;
 
         let t = Instant::now();
-        cl_big_proof.verify(&cl_big_commitment).expect("classical verify");
+        cl_big_proof
+            .verify(&cl_big_commitment)
+            .expect("classical verify");
         let cl_big_verify_ms = t.elapsed().as_secs_f64() * 1_000.0;
 
         let t = Instant::now();
@@ -871,7 +870,9 @@ mod tests {
         println!("║         classical quilibrium_verkle  vs  verkle_pq (PQ-authenticated)    ║");
         println!("╠═══════════════════════════════════════════════════════════════════════════╣");
         println!("║  PHASE A — {BIG_N} keys: INSERT + COMMIT + 1 proof                          ║");
-        println!("║  (prove_multiple of all {BIG_N} keys ≈ {BIG_N}× single-proof cost in BLS48-581) ║");
+        println!(
+            "║  (prove_multiple of all {BIG_N} keys ≈ {BIG_N}× single-proof cost in BLS48-581) ║"
+        );
         println!("╠══════════════════════════════════╦══════════════╦══════════════╦══════════╣");
         println!("║ Operation                        ║  Classical   ║   PQ-auth    ║    ×     ║");
         println!("╠══════════════════════════════════╬══════════════╬══════════════╬══════════╣");
@@ -899,12 +900,15 @@ mod tests {
             pq_big_verify_ms,
             ratio(pq_big_verify_ms, cl_big_verify_ms)
         );
-        println!("║ Estimated prove all {BIG_N} keys      ║ {:>8.0} s  ║ {:>8.0} s  ║  same    ║",
+        println!(
+            "║ Estimated prove all {BIG_N} keys      ║ {:>8.0} s  ║ {:>8.0} s  ║  same    ║",
             cl_big_prove_ms * BIG_N as f64 / 1_000.0,
             pq_big_prove_ms * BIG_N as f64 / 1_000.0
         );
         println!("╠══════════════════════════════════╩══════════════╩══════════════╩══════════╣");
-        println!("║  PHASE B — {SMALL_N} keys: full prove/verify cycle (per-proof unit cost)       ║");
+        println!(
+            "║  PHASE B — {SMALL_N} keys: full prove/verify cycle (per-proof unit cost)       ║"
+        );
         println!("╠══════════════════════════════════╦══════════════╦══════════════╦══════════╣");
         println!(
             "║ Insert ({SMALL_N} keys)                  ║ {:>9.1} ms ║ {:>9.1} ms ║ {:>6.2}× ║",
@@ -979,8 +983,7 @@ mod tests {
         {
             use rayon::prelude::*;
 
-            let small_keys_vec: Vec<Vec<u8>> =
-                small_pairs.iter().map(|(k, _)| k.clone()).collect();
+            let small_keys_vec: Vec<Vec<u8>> = small_pairs.iter().map(|(k, _)| k.clone()).collect();
             let num_threads = rayon::current_num_threads();
 
             // Parallel batch prove (prove_batch uses rayon internally)
@@ -1009,11 +1012,15 @@ mod tests {
 
             let serial_pq_total = total(&pq_prove_ms);
 
-            println!("╠══════════════════════════════════╩══════════════╩══════════════╩══════════╣");
+            println!(
+                "╠══════════════════════════════════╩══════════════╩══════════════╩══════════╣"
+            );
             println!(
                 "║  PHASE C — parallel prove_batch ({SMALL_N} keys, {num_threads} rayon threads)              ║"
             );
-            println!("╠══════════════════════════════════╦══════════════╦══════════════╦══════════╣");
+            println!(
+                "╠══════════════════════════════════╦══════════════╦══════════════╦══════════╣"
+            );
             println!(
                 "║ Serial prove total               ║ {:>9.1} ms ║ {:>9.1} ms ║          ║",
                 total(&cl_prove_ms),
@@ -1021,8 +1028,7 @@ mod tests {
             );
             println!(
                 "║ Parallel prove_batch total       ║ {:>9.1} ms ║ {:>9.1} ms ║          ║",
-                cl_batch_ms,
-                pq_batch_ms
+                cl_batch_ms, pq_batch_ms
             );
             println!(
                 "║ Speed-up (serial / parallel)     ║ {:>9.2}×  ║ {:>9.2}×  ║          ║",
@@ -1038,8 +1044,12 @@ mod tests {
         println!("  • Proof cost is per-key: O(N) for N keys, same for classical and PQ.");
         println!("  • For bulk proving, use prove_batch — with --features rayon it parallelises");
         println!("    across all CPU cores (one tree clone per rayon thread).");
-        println!("  • PQ overhead ≈ 0 on prove/verify; +{pq_sig_bytes} B + {pq_pk_bytes} B on the commitment.");
+        println!(
+            "  • PQ overhead ≈ 0 on prove/verify; +{pq_sig_bytes} B + {pq_pk_bytes} B on the commitment."
+        );
         println!("  • For a full parallel benchmark in release mode:");
-        println!("      cargo test --release --features rayon bench_classical_vs_pq -- --ignored --nocapture");
+        println!(
+            "      cargo test --release --features rayon bench_classical_vs_pq -- --ignored --nocapture"
+        );
     }
 }

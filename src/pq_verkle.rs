@@ -468,10 +468,7 @@ impl PQVerkleTree {
     ///
     /// Returns one [`PQProof`] per input key in the same order as `keys`.
     /// Returns `Err` if any key is absent from the trie.
-    pub fn prove_batch(
-        &mut self,
-        keys: &[Vec<u8>],
-    ) -> Result<Vec<PQProof>, PqVerkleError> {
+    pub fn prove_batch(&mut self, keys: &[Vec<u8>]) -> Result<Vec<PQProof>, PqVerkleError> {
         let commitment = self
             .last_commitment
             .as_ref()
